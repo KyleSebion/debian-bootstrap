@@ -1,5 +1,8 @@
+#!/bin/bash
+
 CHROOT_DIR=/mnt
 INSTALL_DEV=/dev/vda
+
 apt update
 apt -y install parted dosfstools arch-install-scripts systemd-container efibootmgr mmdebstrap
 wipefs -a "$INSTALL_DEV"*
@@ -16,7 +19,7 @@ export DEBIAN_FRONTEND=noninteractive
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/default_environment_locale select en_US.UTF-8'
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/locales_to_be_generated multiselect en_US.UTF-8 UTF-8'
 echo do_symlinks = no > /etc/kernel-img.conf
-apt -y install locales linux-image-amd64 wireless-regdb
+apt -y install locales wireless-regdb linux-image-amd64
 
 apt -y install systemd-boot
 sed -i -re '/options/s/.*/options    root=LABEL=r console=ttyS0/' /efi/loader/entries/*
