@@ -1,4 +1,3 @@
-bash -x << 'EOF'
 CHROOT_DIR=/mnt
 INSTALL_DEV=/dev/vda
 apt update
@@ -37,4 +36,3 @@ CEOF
 genfstab -L "$CHROOT_DIR" | grep LABEL=[er] > "$CHROOT_DIR"/etc/fstab
 umount -R "$CHROOT_DIR"
 efibootmgr -c -d "$INSTALL_DEV" -p 1 -l '\EFI\BOOT\BOOTX64.EFI' -L debian
-EOF
