@@ -6,7 +6,7 @@ INSTALL_DEV=/dev/vda
 apt update
 apt -y install parted dosfstools arch-install-scripts systemd-container efibootmgr mmdebstrap
 wipefs -a "$INSTALL_DEV"*
-parted "$INSTALL_DEV" mklabel gpt mkpart e fat32 4MiB 1020MiB mkpart r 1021MiB 3068MiB set 1 esp on
+parted "$INSTALL_DEV" mklabel gpt mkpart e fat32 4MiB 1020MiB mkpart r 1020MiB 3068MiB set 1 esp on
 udevadm settle
 mkfs.fat -F 32 -n e /dev/disk/by-partlabel/e
 mkfs.ext4 -L r /dev/disk/by-partlabel/r
@@ -42,7 +42,7 @@ adduser --disabled-password --comment '' user
 adduser user sudo
 echo user:live | chpasswd
 
-apt -y install wireless-regdb
+apt -y install wireless-regdb # to get rid of: failed to load regulatory.db
 CEOF
 
 genfstab -L "$CHROOT_DIR" | grep LABEL=[er] > "$CHROOT_DIR"/etc/fstab
