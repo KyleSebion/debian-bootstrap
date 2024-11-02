@@ -1,10 +1,10 @@
 #!/bin/bash
 
 CHROOT_DIR=/mnt
-INSTALL_DEV=/dev/vda
+INSTALL_DEV=/dev/vda # this drive will be wiped!
 
 apt update
-apt -y install parted dosfstools arch-install-scripts systemd-container efibootmgr mmdebstrap
+apt -y install parted dosfstools arch-install-scripts systemd-container mmdebstrap
 wipefs -a "$INSTALL_DEV"*
 parted "$INSTALL_DEV" mklabel gpt mkpart e fat32 4MiB 1020MiB mkpart r 1020MiB 3068MiB set 1 esp on
 udevadm settle
@@ -23,7 +23,7 @@ apt -y install locales
 sed -i -re '/\slocalhost(\s|$)/s/$/ debian/' /etc/hosts
 
 echo do_symlinks = no > /etc/kernel-img.conf
-apt -y install linux-image-amd64
+apt -y install linux-image-"$(dpkg --print-architecture)"
 
 apt -y install systemd-boot
 sed -i -re '/options/s/.*/options    root=LABEL=r console=ttyS0/' /efi/loader/entries/*
@@ -45,6 +45,15 @@ echo user:live | chpasswd
 apt -y install wireless-regdb # to get rid of: failed to load regulatory.db
 CEOF
 
+# kludge to get systemd-boot entry in efi (adds needed binds and hides that bootctl is running in a container by hiding files src/basic/virt.c detect_container looks for)
+systemd-nspawn --bind "$INSTALL_DEV" --bind "$(realpath /dev/disk/by-partlabel/e)" --bind /sys/firmware/efi -PD "$CHROOT_DIR" /bin/bash -x << 'CEOF'
+d="$(mktemp -d)"
+b=(/run/host /proc/1 /sys/fs/cgroup)
+for m in "${b[@]}"; do mount -B "$d" "$m"; done
+bootctl install
+for m in "${b[@]}"; do umount "$m"; done
+rmdir "$d"
+CEOF
+
 genfstab -L "$CHROOT_DIR" | grep LABEL=[er] > "$CHROOT_DIR"/etc/fstab
 umount -R "$CHROOT_DIR"
-efibootmgr -c -d "$INSTALL_DEV" -p 1 -l '\EFI\systemd\systemd-bootx64.efi' -L 'Linux Boot Manager' # kludge because installing systemd-boot in systemd-nspawn doesn't add a boot entry
