@@ -26,7 +26,7 @@ echo do_symlinks = no > /etc/kernel-img.conf
 apt -y install linux-image-"$(dpkg --print-architecture)"
 
 apt -y install systemd-boot
-sed -i -re '/options/s/.*/options    root=LABEL=r console=ttyS0/' /efi/loader/entries/*
+sed -i -re '/options/s/.*/options    root=LABEL=r console=tty0 console=ttyS0/' /efi/loader/entries/*
 
 echo '[Match] Name=enp1s0 [Network] Address=10.10.10.3/24 Gateway=10.10.10.1 DNS=1.1.1.1 DNS=8.8.8.8 [DHCPv4] UseDNS=false [DHCPv6] UseDNS=false' | tr ' ' \\n > /etc/systemd/network/10-enp1s0.network
 systemctl enable systemd-networkd
@@ -41,6 +41,7 @@ apt -y install sudo
 adduser --disabled-password --comment '' user
 adduser user sudo
 echo user:live | chpasswd
+echo 'user ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/010_user-nopasswd
 
 apt -y install wireless-regdb # to get rid of: failed to load regulatory.db
 CEOF
