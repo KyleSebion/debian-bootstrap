@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/bin/bash -x
 
 CHROOT_DIR=/mnt
 INSTALL_DEV=/dev/vda # this drive will be wiped!
