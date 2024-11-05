@@ -25,8 +25,8 @@ sed -i -re '/\slocalhost(\s|$)/s/$/ debian/' /etc/hosts
 echo do_symlinks = no > /etc/kernel-img.conf
 apt -y install linux-image-"$(dpkg --print-architecture)"
 
+echo 'root=LABEL=r console=tty0 console=ttyS0' > /etc/kernel/cmdline
 apt -y install systemd-boot
-sed -i -re '/options/s/.*/options    root=LABEL=r console=tty0 console=ttyS0/' /efi/loader/entries/*
 
 echo '[Match] Name=enp1s0 [Network] Address=10.10.10.3/24 Gateway=10.10.10.1 DNS=1.1.1.1 DNS=8.8.8.8 [DHCPv4] UseDNS=false [DHCPv6] UseDNS=false' | tr ' ' \\n > /etc/systemd/network/10-enp1s0.network
 systemctl enable systemd-networkd
