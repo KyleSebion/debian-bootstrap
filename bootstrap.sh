@@ -56,5 +56,50 @@ for m in "${b[@]}"; do umount "$m"; done
 rmdir "$d"
 CEOF
 
+# UKI
+systemd-nspawn -PD "$CHROOT_DIR" /bin/bash -x << 'CEOF'
+set -e
+apt -y install binutils
+install -d /etc/ks-uki
+wget -O /etc/ks-uki/img.bmp https://people.math.sc.edu/Burkardt/data/bmp/blackbuck.bmp
+cat << 'KS-UKI' > /usr/local/sbin/ks-uki
+#!/bin/bash
+set -e
+
+declare -A path
+path[stub]=/usr/lib/systemd/boot/efi/linuxx64.efi.stub
+path[osrel]=/usr/lib/os-release
+path[cmdline]=/etc/kernel/cmdline
+path[splash]=/etc/ks-uki/img.bmp
+path[initrd]=/boot/initrd.img-$1
+path[linux]=/boot/vmlinuz-$1
+path[efiout]=/efi/EFI/Linux/debian-$1.efi
+
+alignment="$(objdump -p "${path[stub]}" | mawk '$1=="SectionAlignment" { print(("0x"$2)+0) }')"
+getAligned () { echo $(( $1 + $alignment - $1 % $alignment )); }
+
+declare -A offs
+getOffsetAfter () { getAligned $(( offs[$1] + $( stat -Lc%s "${path[$1]}" ) )); }
+offs[osrel]=$(getAligned $(objdump -h "${path[stub]}" | mawk 'NF==7 {s=("0x"$3)+0;o=("0x"$4)+0} END {print(s+o)}'))
+offs[cmdline]=$(getOffsetAfter osrel)
+offs[splash]=$(getOffsetAfter cmdline)
+offs[initrd]=$(getOffsetAfter splash)
+offs[linux]=$(getOffsetAfter initrd)
+
+declare -a args
+for s in osrel cmdline splash initrd linux; do args+=(--add-section ".$s=${path[$s]}" --change-section-vma ".$s=$(printf 0x%x "${offs[$s]}")"); done
+objcopy "${args[@]}" "${path[stub]}" "${path[efiout]}"
+KS-UKI
+chmod 755 /usr/local/sbin/ks-uki
+
+entrySrc="$(bootctl list | grep -m1 source | awk '{print($2)}')"
+if [[ "$entrySrc" =~ [^-]+/([^-]+)-(.*)\.conf ]]; then
+  ks-uki "${BASH_REMATCH[2]}"
+  rm -rv "/efi/${BASH_REMATCH[1]}" "$entrySrc"
+else
+  echo 'Failed to find kernel version to generate UKI from'
+fi
+CEOF
+
 genfstab -L "$CHROOT_DIR" | grep LABEL=[er] > "$CHROOT_DIR"/etc/fstab
 umount -R "$CHROOT_DIR"
