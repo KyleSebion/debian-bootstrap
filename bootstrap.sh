@@ -69,11 +69,12 @@ set -e
 declare -A path
 path[stub]=/usr/lib/systemd/boot/efi/linuxx64.efi.stub
 path[osrel]=/usr/lib/os-release
+path[uname]=$(mktemp); echo "$1" > "${path[uname]}"
 path[cmdline]=/etc/kernel/cmdline
 path[splash]=/etc/ks-uki/img.bmp
-path[initrd]=/boot/initrd.img-$1
-path[linux]=/boot/vmlinuz-$1
-path[efiout]=/efi/EFI/Linux/debian-$1.efi
+path[initrd]=/boot/initrd.img-"$1"
+path[linux]=/boot/vmlinuz-"$1"
+path[efiout]=/efi/EFI/Linux/debian-"$1".efi
 
 alignment="$(objdump -p "${path[stub]}" | mawk '$1=="SectionAlignment" { print(("0x"$2)+0) }')"
 getAligned () { echo $(( $1 + $alignment - $1 % $alignment )); }
@@ -81,21 +82,23 @@ getAligned () { echo $(( $1 + $alignment - $1 % $alignment )); }
 declare -A offs
 getOffsetAfter () { getAligned $(( offs[$1] + $( stat -Lc%s "${path[$1]}" ) )); }
 offs[osrel]=$(getAligned $(objdump -h "${path[stub]}" | mawk 'NF==7 {s=("0x"$3)+0;o=("0x"$4)+0} END {print(s+o)}'))
-offs[cmdline]=$(getOffsetAfter osrel)
+offs[uname]=$(getOffsetAfter osrel)
+offs[cmdline]=$(getOffsetAfter uname)
 offs[splash]=$(getOffsetAfter cmdline)
 offs[initrd]=$(getOffsetAfter splash)
 offs[linux]=$(getOffsetAfter initrd)
 
 declare -a args
-for s in osrel cmdline splash initrd linux; do args+=(--add-section ".$s=${path[$s]}" --change-section-vma ".$s=$(printf 0x%x "${offs[$s]}")"); done
+for s in "${!offs[@]}"; do args+=(--add-section ".$s=${path[$s]}" --change-section-vma ".$s=$(printf 0x%x "${offs[$s]}")"); done
 objcopy "${args[@]}" "${path[stub]}" "${path[efiout]}"
+rm "${path[uname]}"
 KS-UKI
 chmod 755 /usr/local/sbin/ks-uki
 
 entrySrc="$(bootctl list | grep -m1 source | awk '{print($2)}')"
 if [[ "$entrySrc" =~ [^-]+/([^-]+)-(.*)\.conf ]]; then
   ks-uki "${BASH_REMATCH[2]}"
-  rm -rv "/efi/${BASH_REMATCH[1]}" "$entrySrc"
+  rm -rv "/efi/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}" "$entrySrc"
 else
   echo 'Failed to find kernel version to generate UKI from'
 fi
