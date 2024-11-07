@@ -11,10 +11,11 @@ udevadm settle
 mkfs.fat -F 32 -n e /dev/disk/by-partlabel/e
 mkfs.ext4 -L r /dev/disk/by-partlabel/r
 mount LABEL=r "$CHROOT_DIR"
-mmdebstrap --skip=cleanup/apt,cleanup/reproducible bookworm "$CHROOT_DIR"
+mmdebstrap --aptopt='Acquire::http { Proxy "http://10.10.10.1:3142"; }' --skip=cleanup/apt,cleanup/reproducible bookworm "$CHROOT_DIR"
 mount -m LABEL=e "$CHROOT_DIR"/efi
 
 systemd-nspawn -PD "$CHROOT_DIR" /bin/bash -x << 'CEOF'
+mv /etc/apt/apt.conf.d/99mmdebstrap /etc/apt/apt.conf.d/proxy
 export DEBIAN_FRONTEND=noninteractive
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/default_environment_locale select en_US.UTF-8'
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/locales_to_be_generated multiselect en_US.UTF-8 UTF-8'
