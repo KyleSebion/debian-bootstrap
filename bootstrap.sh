@@ -99,7 +99,8 @@ chmod 755 /usr/local/sbin/ks-uki
 entrySrc="$(bootctl list | grep -m1 source | awk '{print($2)}')"
 if [[ "$entrySrc" =~ [^-]+/([^-]+)-(.*)\.conf ]]; then
   ks-uki "${BASH_REMATCH[2]}"
-  rm -rv "/efi/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}" "$entrySrc"
+  rm -r "/efi/${BASH_REMATCH[1]}/${BASH_REMATCH[2]}" "$entrySrc"
+  rmdir --ignore-fail-on-non-empty "/efi/${BASH_REMATCH[1]}"
 else
   echo 'Failed to find kernel version to generate UKI from'
 fi
