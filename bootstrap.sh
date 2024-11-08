@@ -2,6 +2,7 @@
 
 CHROOT_DIR=/mnt
 INSTALL_DEV=/dev/vda # this drive will be wiped!
+UKI_IMG=/uki.bmp
 
 apt update
 apt -y install parted dosfstools arch-install-scripts systemd-container mmdebstrap efibootmgr
@@ -13,6 +14,7 @@ mkfs.ext4 -L r /dev/disk/by-partlabel/r
 mount LABEL=r "$CHROOT_DIR"
 mmdebstrap --aptopt='Acquire::http { Proxy "http://10.10.10.1:3142"; }' --skip=cleanup/apt,cleanup/reproducible bookworm "$CHROOT_DIR"
 mount -m LABEL=e "$CHROOT_DIR"/efi
+cp "$UKI_IMG" "$CHROOT_DIR/uki.bmp"
 
 systemd-nspawn -PD "$CHROOT_DIR" /bin/bash -x << 'CEOF'
 mv /etc/apt/apt.conf.d/99mmdebstrap /etc/apt/apt.conf.d/proxy
@@ -23,9 +25,9 @@ apt -y install locales
 apt -y install initramfs-tools systemd-boot
 
 # KS-UKI
-apt -y install binutils wget
+apt -y install binutils
 install -d /etc/ks-uki
-wget -O /etc/ks-uki/img.bmp https://people.math.sc.edu/Burkardt/data/bmp/blackbuck.bmp
+mv /uki.bmp /etc/ks-uki/img.bmp
 cat << 'KS-UKI' > /usr/local/sbin/ks-uki
 #!/bin/bash -e
 declare -A path
@@ -69,7 +71,7 @@ KS-UKI
 chmod 755 /usr/local/sbin/ks-uki /etc/kernel/post{inst,rm}.d/zzz-ks-uki /etc/initramfs/post-update.d/zzz-ks-uki
 
 echo do_symlinks = no > /etc/kernel-img.conf
-echo 'root=LABEL=r console=tty0 console=ttyS0' > /etc/kernel/cmdline
+echo root=LABEL=r console=tty0 console=ttyS0 quiet > /etc/kernel/cmdline
 apt -y install linux-image-"$(dpkg --print-architecture)"
 
 echo '[Match] Name=enp1s0 [Network] Address=10.10.10.3/24 Gateway=10.10.10.1 DNS=1.1.1.1 DNS=8.8.8.8 [DHCPv4] UseDNS=false [DHCPv6] UseDNS=false' | tr ' ' \\n > /etc/systemd/network/10-enp1s0.network
