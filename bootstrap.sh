@@ -14,7 +14,7 @@ mkfs.ext4 -L r /dev/disk/by-partlabel/r
 mount LABEL=r "$CHROOT_DIR"
 mmdebstrap --aptopt='Acquire::http { Proxy "http://10.10.10.1:3142"; }' --skip=cleanup/apt,cleanup/reproducible bookworm "$CHROOT_DIR"
 mount -m LABEL=e "$CHROOT_DIR"/efi
-cp "$UKI_IMG" "$CHROOT_DIR/uki.bmp"
+cp "$UKI_IMG" "$CHROOT_DIR"/uki.bmp
 
 systemd-nspawn -PD "$CHROOT_DIR" /bin/bash -x << 'CEOF'
 mv /etc/apt/apt.conf.d/99mmdebstrap /etc/apt/apt.conf.d/proxy
