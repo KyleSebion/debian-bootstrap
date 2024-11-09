@@ -22,10 +22,9 @@ export DEBIAN_FRONTEND=noninteractive
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/default_environment_locale select en_US.UTF-8'
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/locales_to_be_generated multiselect en_US.UTF-8 UTF-8'
 apt -y install locales
-apt -y install initramfs-tools systemd-boot
 
 # KS-UKI
-apt -y install binutils
+apt -y install binutils initramfs-tools systemd-boot
 install -d /etc/ks-uki
 mv /uki.bmp /etc/ks-uki/img.bmp
 cat << 'KS-UKI' > /usr/local/sbin/ks-uki
