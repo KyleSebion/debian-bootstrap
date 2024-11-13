@@ -23,8 +23,30 @@ LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/default_environment_loc
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/locales_to_be_generated multiselect en_US.UTF-8 UTF-8'
 apt -y install locales
 
+# SecureBoot
+apt -y install efitools sbsigntool uuid-runtime openssl
+mkdir /sb; pushd /sb
+uuidgen -r > guid
+for v in pk kek db; do
+  openssl req -nodes -new -x509 -newkey rsa:2048 -days 365000 -subj /CN=$v/ -keyout $v.key -out $v.pem
+  cert-to-efi-sig-list -g $(<guid) $v.pem $v.esl
+done
+sign-efi-sig-list -g $(<guid) -k  pk.key -c  pk.pem  PK /dev/null     rmpk
+sign-efi-sig-list -g $(<guid) -k  pk.key -c  pk.pem  PK    pk.esl  pk.auth
+sign-efi-sig-list -g $(<guid) -k  pk.key -c  pk.pem KEK   kek.esl kek.auth
+sign-efi-sig-list -g $(<guid) -k kek.key -c kek.pem  db    db.esl  db.auth
+popd
+
+# systemd-boot
+apt -y install systemd-boot
+mkdir -p /efi/loader/keys/sb
+cp -vt /efi/loader/keys/sb /sb/*.auth
+sbsign --key /sb/db.key --cert /sb/db.pem /efi/EFI/systemd/systemd-bootx64.efi --output /efi/EFI/systemd/systemd-bootx64.efi
+sbsign --key /sb/db.key --cert /sb/db.pem /efi/EFI/BOOT/BOOTX64.EFI --output /efi/EFI/BOOT/BOOTX64.EFI
+echo timeout 30 >> "$CHROOT_DIR"/efi/loader/loader.conf
+
 # KS-UKI
-apt -y install binutils initramfs-tools systemd-boot
+apt -y install binutils initramfs-tools
 install -d /etc/ks-uki
 mv /uki.bmp /etc/ks-uki/img.bmp
 cat << 'KS-UKI' > /usr/local/sbin/ks-uki
@@ -58,6 +80,7 @@ cat << 'KS-UKI' | tee /etc/kernel/postinst.d/zzz-ks-uki /etc/initramfs/post-upda
 if [ -z "$1" ]; then echo missing version number >&2; exit 1; fi
 et=$(</etc/kernel/entry-token)
 /usr/local/sbin/ks-uki "$1" "$et"
+sbsign --key /sb/db.key --cert /sb/db.pem /efi/EFI/Linux/"$et"-"$1".efi --output /efi/EFI/Linux/"$et"-"$1".efi
 rm -r "/efi/$et/$1" "/efi/loader/entries/$et-$1.conf"
 rmdir --ignore-fail-on-non-empty "/efi/$et"
 KS-UKI
@@ -70,7 +93,7 @@ KS-UKI
 chmod 755 /usr/local/sbin/ks-uki /etc/kernel/post{inst,rm}.d/zzz-ks-uki /etc/initramfs/post-update.d/zzz-ks-uki
 
 echo do_symlinks = no > /etc/kernel-img.conf
-echo root=LABEL=r console=tty0 console=ttyS0 quiet > /etc/kernel/cmdline
+echo root=LABEL=r console=tty0 console=ttyS0 > /etc/kernel/cmdline
 apt -y install linux-image-"$(dpkg --print-architecture)"
 
 echo '[Match] Name=enp1s0 [Network] Address=10.10.10.3/24 Gateway=10.10.10.1 DNS=1.1.1.1 DNS=8.8.8.8 [DHCPv4] UseDNS=false [DHCPv6] UseDNS=false' | tr ' ' \\n > /etc/systemd/network/10-enp1s0.network
