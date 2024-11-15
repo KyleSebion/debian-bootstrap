@@ -39,11 +39,11 @@ popd
 
 # systemd-boot
 apt -y install systemd-boot
-mkdir -p /efi/loader/keys/sb
-cp -vt /efi/loader/keys/sb /sb/*.auth
+mkdir -p /efi/loader/keys/auto
+cp -vt /efi/loader/keys/auto /sb/*.auth
 sbsign --key /sb/db.key --cert /sb/db.pem /efi/EFI/systemd/systemd-bootx64.efi --output /efi/EFI/systemd/systemd-bootx64.efi
 sbsign --key /sb/db.key --cert /sb/db.pem /efi/EFI/BOOT/BOOTX64.EFI --output /efi/EFI/BOOT/BOOTX64.EFI
-echo timeout 30 >> "$CHROOT_DIR"/efi/loader/loader.conf
+#echo secure-boot-enroll if-safe >> "$CHROOT_DIR"/efi/loader/loader.conf # added in version 253
 
 # KS-UKI
 apt -y install binutils initramfs-tools
