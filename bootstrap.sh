@@ -3,6 +3,7 @@
 CHROOT_DIR=/mnt
 INSTALL_DEV=/dev/vda # this drive will be wiped!
 UKI_IMG=/root/uki.bmp
+SBCTL=/usr/local/sbin/sbctl
 
 apt update
 apt -y install parted dosfstools arch-install-scripts systemd-container mmdebstrap efibootmgr
@@ -14,9 +15,10 @@ mkfs.ext4 -L r /dev/disk/by-partlabel/r
 mount LABEL=r "$CHROOT_DIR"
 mmdebstrap --aptopt='Acquire::http { Proxy "http://10.10.10.1:3142"; }' --skip=cleanup/apt,cleanup/reproducible bookworm "$CHROOT_DIR"
 mount -m LABEL=e "$CHROOT_DIR"/efi
-cp "$UKI_IMG" "$CHROOT_DIR"/uki.bmp
+cp "$UKI_IMG" "$CHROOT_DIR$UKI_IMG"
+cp "$SBCTL" "$CHROOT_DIR$SBCTL"
 
-systemd-nspawn -PD "$CHROOT_DIR" /bin/bash -x << 'CEOF'
+systemd-nspawn -E UKI_IMG="$UKI_IMG" -E SBCTL="$SBCTL" -PD "$CHROOT_DIR" /bin/bash -x << 'CEOF'
 mv /etc/apt/apt.conf.d/99mmdebstrap /etc/apt/apt.conf.d/proxy
 export DEBIAN_FRONTEND=noninteractive
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/default_environment_locale select en_US.UTF-8'
@@ -24,31 +26,17 @@ LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/locales_to_be_generated
 apt -y install locales
 
 # SecureBoot
-apt -y install efitools sbsigntool uuid-runtime openssl
-mkdir /sb; pushd /sb
-uuidgen -r > guid
-for v in pk kek db; do
-  openssl req -nodes -new -x509 -newkey rsa:2048 -days 365000 -subj /CN=$v/ -keyout $v.key -out $v.pem
-  cert-to-efi-sig-list -g $(<guid) $v.pem $v.esl
-done
-sign-efi-sig-list -g $(<guid) -k  pk.key -c  pk.pem  PK /dev/null     rmpk
-sign-efi-sig-list -g $(<guid) -k  pk.key -c  pk.pem  PK    pk.esl  pk.auth
-sign-efi-sig-list -g $(<guid) -k  pk.key -c  pk.pem KEK   kek.esl kek.auth
-sign-efi-sig-list -g $(<guid) -k kek.key -c kek.pem  db    db.esl  db.auth
-popd
+sbctl create-keys
 
 # systemd-boot
 apt -y install systemd-boot
-mkdir -p /efi/loader/keys/auto
-cp -vt /efi/loader/keys/auto /sb/*.auth
-sbsign --key /sb/db.key --cert /sb/db.pem /efi/EFI/systemd/systemd-bootx64.efi --output /efi/EFI/systemd/systemd-bootx64.efi
-sbsign --key /sb/db.key --cert /sb/db.pem /efi/EFI/BOOT/BOOTX64.EFI --output /efi/EFI/BOOT/BOOTX64.EFI
-#echo secure-boot-enroll if-safe >> "$CHROOT_DIR"/efi/loader/loader.conf # added in version 253
+sbctl sign /efi/EFI/systemd/systemd-bootx64.efi
+sbctl sign /efi/EFI/BOOT/BOOTX64.EFI
 
 # KS-UKI
 apt -y install binutils initramfs-tools
 install -d /etc/ks-uki
-mv /uki.bmp /etc/ks-uki/splash.bmp
+mv "$UKI_IMG" /etc/ks-uki/splash.bmp
 cat << 'KS-UKI' > /usr/local/sbin/ks-uki
 #!/bin/bash -e
 declare -A path
@@ -77,10 +65,11 @@ rm "${path[uname]}"
 KS-UKI
 cat << 'KS-UKI' | tee /etc/kernel/postinst.d/zzz-ks-uki /etc/initramfs/post-update.d/zzz-ks-uki > /dev/null
 #!/bin/bash -e
+export PATH=$PATH:/usr/local/sbin
 if [ -z "$1" ]; then echo missing version number >&2; exit 1; fi
 et=$(</etc/kernel/entry-token)
-/usr/local/sbin/ks-uki "$1" "$et"
-sbsign --key /sb/db.key --cert /sb/db.pem /efi/EFI/Linux/"$et"-"$1".efi --output /efi/EFI/Linux/"$et"-"$1".efi
+ks-uki "$1" "$et"
+sbctl sign /efi/EFI/Linux/"$et"-"$1".efi
 rm -r "/efi/$et/$1" "/efi/loader/entries/$et-$1.conf"
 rmdir --ignore-fail-on-non-empty "/efi/$et"
 KS-UKI
@@ -115,6 +104,9 @@ apt -y install wireless-regdb # to get rid of: failed to load regulatory.db
 sed -i -re '/\slocalhost(\s|$)/s/$/ debian/' /etc/hosts
 CEOF
 
+mount -m -B "$CHROOT_DIR"/var/lib/sbctl /var/lib/sbctl
+sbctl enroll-keys -m
+umount /var/lib/sbctl
 genfstab -L "$CHROOT_DIR" | grep LABEL=[er] > "$CHROOT_DIR"/etc/fstab
 umount -R "$CHROOT_DIR"
 efibootmgr -c -d "$INSTALL_DEV" -p 1 -l '\EFI\systemd\systemd-bootx64.efi' -L 'Linux Boot Manager' # kludge because installing systemd-boot in systemd-nspawn doesn't add a boot entry
