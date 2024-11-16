@@ -2,7 +2,7 @@
 
 CHROOT_DIR=/mnt
 INSTALL_DEV=/dev/vda # this drive will be wiped!
-UKI_IMG=/uki.bmp
+UKI_IMG=/root/uki.bmp
 
 apt update
 apt -y install parted dosfstools arch-install-scripts systemd-container mmdebstrap efibootmgr
@@ -48,7 +48,7 @@ sbsign --key /sb/db.key --cert /sb/db.pem /efi/EFI/BOOT/BOOTX64.EFI --output /ef
 # KS-UKI
 apt -y install binutils initramfs-tools
 install -d /etc/ks-uki
-mv /uki.bmp /etc/ks-uki/img.bmp
+mv /uki.bmp /etc/ks-uki/splash.bmp
 cat << 'KS-UKI' > /usr/local/sbin/ks-uki
 #!/bin/bash -e
 declare -A path
@@ -56,7 +56,7 @@ path[stub]=/usr/lib/systemd/boot/efi/linuxx64.efi.stub
 path[osrel]=/usr/lib/os-release
 path[uname]=$(mktemp); echo "$1" > "${path[uname]}"
 path[cmdline]=/etc/kernel/cmdline
-path[splash]=/etc/ks-uki/img.bmp
+path[splash]=/etc/ks-uki/splash.bmp
 path[initrd]=/boot/initrd.img-"$1"
 path[linux]=/boot/vmlinuz-"$1"
 path[efiout]=/efi/EFI/Linux/"$2"-"$1".efi
