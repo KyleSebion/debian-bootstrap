@@ -25,11 +25,9 @@ LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/default_environment_loc
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/locales_to_be_generated multiselect en_US.UTF-8 UTF-8'
 apt -y install locales
 
-# SecureBoot
-sbctl create-keys
-
-# systemd-boot
+# systemd-boot + SecureBoot
 apt -y install systemd-boot
+sbctl create-keys
 sbctl sign /efi/EFI/systemd/systemd-bootx64.efi
 sbctl sign /efi/EFI/BOOT/BOOTX64.EFI
 
@@ -39,15 +37,18 @@ install -d /etc/ks-uki
 mv "$UKI_IMG" /etc/ks-uki/splash.bmp
 cat << 'KS-UKI' > /usr/local/sbin/ks-uki
 #!/bin/bash -e
+cmd=$1 et=$2 un=$3
 declare -A path
 path[stub]=/usr/lib/systemd/boot/efi/linuxx64.efi.stub
 path[osrel]=/usr/lib/os-release
-path[uname]=$(mktemp); echo "$1" > "${path[uname]}"
+path[uname]=$(mktemp); echo "$un" > "${path[uname]}"
 path[cmdline]=/etc/kernel/cmdline
 path[splash]=/etc/ks-uki/splash.bmp
-path[initrd]=/boot/initrd.img-"$1"
-path[linux]=/boot/vmlinuz-"$1"
-path[efiout]=/efi/EFI/Linux/"$2"-"$1".efi
+path[initrd]=/boot/initrd.img-"$un"
+path[linux]=/boot/vmlinuz-"$un"
+path[efiout]=/efi/EFI/Linux/"$et"-"$un".efi
+if [ "$cmd"  = rm ]; then rm -f "${path[efiout]}"; exit 0; fi
+if [ "$cmd" != mk ]; then echo bad cmd $cmd >&2;   exit 1; fi
 alignment="$(objdump -p "${path[stub]}" | mawk '$1=="SectionAlignment" { print(("0x"$2)+0) }')"
 getAligned () { echo $(( $1 + $alignment - $1 % $alignment )); }
 declare -A offs
@@ -61,24 +62,18 @@ offs[linux]=$(getOffsetAfter initrd)
 declare -a args
 for s in "${!offs[@]}"; do args+=(--add-section ".$s=${path[$s]}" --change-section-vma ".$s=$(printf 0x%x "${offs[$s]}")"); done
 objcopy "${args[@]}" "${path[stub]}" "${path[efiout]}"
-rm "${path[uname]}"
-KS-UKI
-cat << 'KS-UKI' | tee /etc/kernel/postinst.d/zzz-ks-uki /etc/initramfs/post-update.d/zzz-ks-uki > /dev/null
-#!/bin/bash -e
-export PATH=$PATH:/usr/local/sbin
-if [ -z "$1" ]; then echo missing version number >&2; exit 1; fi
-et=$(</etc/kernel/entry-token)
-ks-uki "$1" "$et"
-sbctl sign /efi/EFI/Linux/"$et"-"$1".efi
-rm -r "/efi/$et/$1" "/efi/loader/entries/$et-$1.conf"
+/usr/local/sbin/sbctl sign "${path[efiout]}"
+rm -r "${path[uname]}" "/efi/$et/$un" "/efi/loader/entries/$et-$un.conf"
 rmdir --ignore-fail-on-non-empty "/efi/$et"
 KS-UKI
-cat << 'KS-UKI' > /etc/kernel/postrm.d/zzz-ks-uki
+st=$(cat << 'KS-UKI'
 #!/bin/bash -e
 if [ -z "$1" ]; then echo missing version number >&2; exit 1; fi
-rmIfExists () { [ -f "$1" ] && rm "$1" || exit 0; }
-rmIfExists /efi/EFI/Linux/"$(</etc/kernel/entry-token)"-"$1".efi
+/usr/local/sbin/ks-uki '%s' "$(</etc/kernel/entry-token)" "$1"
 KS-UKI
+)
+printf "$st\n" mk | tee > /dev/null /etc/kernel/postinst.d/zzz-ks-uki /etc/initramfs/post-update.d/zzz-ks-uki
+printf "$st\n" rm | tee > /dev/null /etc/kernel/postrm.d/zzz-ks-uki
 chmod 755 /usr/local/sbin/ks-uki /etc/kernel/post{inst,rm}.d/zzz-ks-uki /etc/initramfs/post-update.d/zzz-ks-uki
 
 echo do_symlinks = no > /etc/kernel-img.conf
