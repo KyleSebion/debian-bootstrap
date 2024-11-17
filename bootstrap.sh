@@ -47,6 +47,9 @@ cat << 'KS-UKI' > /usr/local/sbin/ks-uki
 #!/bin/bash -e
 cmd=$1 et=$2 un=$3
 declare -A path
+path[efiout]=/efi/EFI/Linux/"$et"-"$un".efi
+if [ "$cmd"  = remove ]; then rm -f "${path[efiout]}"; exit 0; fi
+if [ "$cmd" != add    ]; then echo bad cmd $cmd >&2;   exit 1; fi
 path[stub]=/usr/lib/systemd/boot/efi/linuxx64.efi.stub
 path[osrel]=/usr/lib/os-release
 path[uname]=$(mktemp); echo "$un" > "${path[uname]}"
@@ -54,9 +57,6 @@ path[cmdline]=/etc/kernel/cmdline
 path[splash]=/etc/ks-uki/splash.bmp
 path[initrd]=/boot/initrd.img-"$un"
 path[linux]=/boot/vmlinuz-"$un"
-path[efiout]=/efi/EFI/Linux/"$et"-"$un".efi
-if [ "$cmd"  = remove ]; then rm -f "${path[efiout]}"; exit 0; fi
-if [ "$cmd" != add    ]; then echo bad cmd $cmd >&2;   exit 1; fi
 alignment="$(objdump -p "${path[stub]}" | mawk '$1=="SectionAlignment" { print(("0x"$2)+0) }')"
 getAligned () { echo $(( $1 + $alignment - $1 % $alignment )); }
 declare -A offs
