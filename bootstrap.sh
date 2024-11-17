@@ -4,9 +4,10 @@ CHROOT_DIR=/mnt
 INSTALL_DEV=/dev/vda # this drive will be wiped!
 UKI_IMG=/root/uki.bmp
 SBCTL=/usr/local/sbin/sbctl
+SIGNPKG=/root/ks-systemd-boot-signer_1.0_all.deb
 
 apt update
-apt -y install parted dosfstools arch-install-scripts systemd-container mmdebstrap efibootmgr
+apt -y install parted dosfstools arch-install-scripts systemd-container mmdebstrap efibootmgr ruby-rubygems; gem install fpm
 wipefs -a "$INSTALL_DEV"*
 parted "$INSTALL_DEV" mklabel gpt mkpart e fat32 4MiB 1020MiB mkpart r 1020MiB 3068MiB set 1 esp on
 udevadm settle
@@ -18,7 +19,15 @@ mount -m LABEL=e "$CHROOT_DIR"/efi
 cp "$UKI_IMG" "$CHROOT_DIR$UKI_IMG"
 cp "$SBCTL" "$CHROOT_DIR$SBCTL"
 
-systemd-nspawn -E UKI_IMG="$UKI_IMG" -E SBCTL="$SBCTL" -PD "$CHROOT_DIR" /bin/bash -x << 'CEOF'
+# Create package to auto-sign systemd-boot
+trigf=/usr/lib/systemd/boot/efi/systemd-bootx64.efi
+bashScript () { printf %s\\n '#!/bin/bash' 'trigf='"'$trigf'" "$@"; }
+fpm -n ks-systemd-boot-signer -s empty -t deb --deb-interest "$trigf" -p "$SIGNPKG" \
+  --after-install <(bashScript '[ "$1" = "configure" ] || [ "$1" = "triggered" ] && rm -f "$trigf".signed && [ -f "$trigf" ] && '"'$SBCTL'"' sign -o "$trigf"{.signed,} || true') \
+  --after-remove  <(bashScript 'rm -f "$trigf".signed')
+mv "$SIGNPKG" "$CHROOT_DIR$SIGNPKG"
+
+systemd-nspawn -E UKI_IMG="$UKI_IMG" -E SBCTL="$SBCTL" -E SIGNPKG="$SIGNPKG" -PD "$CHROOT_DIR" /bin/bash -x << 'CEOF'
 mv /etc/apt/apt.conf.d/99mmdebstrap /etc/apt/apt.conf.d/proxy
 export DEBIAN_FRONTEND=noninteractive
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/default_environment_locale select en_US.UTF-8'
@@ -26,10 +35,9 @@ LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/locales_to_be_generated
 apt -y install locales
 
 # systemd-boot + SecureBoot
-apt -y install systemd-boot
 sbctl create-keys
-sbctl sign /efi/EFI/systemd/systemd-bootx64.efi
-sbctl sign /efi/EFI/BOOT/BOOTX64.EFI
+apt -y install "$SIGNPKG"; rm "$SIGNPKG"
+apt -y install systemd-boot
 
 # KS-UKI
 apt -y install binutils initramfs-tools
@@ -47,8 +55,8 @@ path[splash]=/etc/ks-uki/splash.bmp
 path[initrd]=/boot/initrd.img-"$un"
 path[linux]=/boot/vmlinuz-"$un"
 path[efiout]=/efi/EFI/Linux/"$et"-"$un".efi
-if [ "$cmd"  = rm ]; then rm -f "${path[efiout]}"; exit 0; fi
-if [ "$cmd" != mk ]; then echo bad cmd $cmd >&2;   exit 1; fi
+if [ "$cmd"  = remove ]; then rm -f "${path[efiout]}"; exit 0; fi
+if [ "$cmd" != add    ]; then echo bad cmd $cmd >&2;   exit 1; fi
 alignment="$(objdump -p "${path[stub]}" | mawk '$1=="SectionAlignment" { print(("0x"$2)+0) }')"
 getAligned () { echo $(( $1 + $alignment - $1 % $alignment )); }
 declare -A offs
@@ -63,18 +71,20 @@ declare -a args
 for s in "${!offs[@]}"; do args+=(--add-section ".$s=${path[$s]}" --change-section-vma ".$s=$(printf 0x%x "${offs[$s]}")"); done
 objcopy "${args[@]}" "${path[stub]}" "${path[efiout]}"
 /usr/local/sbin/sbctl sign "${path[efiout]}"
-rm -r "${path[uname]}" "/efi/$et/$un" "/efi/loader/entries/$et-$un.conf"
-rmdir --ignore-fail-on-non-empty "/efi/$et"
+rm -fr "${path[uname]}" "/efi/$et/$un" "/efi/loader/entries/$et-$un.conf"
+[ -d "/efi/$et" ] && rmdir --ignore-fail-on-non-empty "/efi/$et" || true
 KS-UKI
 st=$(cat << 'KS-UKI'
 #!/bin/bash -e
-if [ -z "$1" ]; then echo missing version number >&2; exit 1; fi
-/usr/local/sbin/ks-uki '%s' "$(</etc/kernel/entry-token)" "$1"
+un="%s"
+if [ -z "$un" ]; then echo missing version number >&2; exit 1; fi
+/usr/local/sbin/ks-uki "%s" "$(</etc/kernel/entry-token)" "$un"
 KS-UKI
 )
-printf "$st\n" mk | tee > /dev/null /etc/kernel/postinst.d/zzz-ks-uki /etc/initramfs/post-update.d/zzz-ks-uki
-printf "$st\n" rm | tee > /dev/null /etc/kernel/postrm.d/zzz-ks-uki
-chmod 755 /usr/local/sbin/ks-uki /etc/kernel/post{inst,rm}.d/zzz-ks-uki /etc/initramfs/post-update.d/zzz-ks-uki
+printf "$st\n" '$1' add    | tee > /dev/null /etc/kernel/postinst.d/zzz-ks-uki /etc/initramfs/post-update.d/zzz-ks-uki
+printf "$st\n" '$1' remove | tee > /dev/null /etc/kernel/postrm.d/zzz-ks-uki
+printf "$st\n" '$2' '$1'   | tee > /dev/null /etc/kernel/install.d/zzz-ks-uki.install # needed for systemd-boot purge then install because a systemd-boot install script looks for kernels to kernel-install add to /efi
+chmod 755 /usr/local/sbin/ks-uki /etc/kernel/post{inst,rm}.d/zzz-ks-uki /etc/initramfs/post-update.d/zzz-ks-uki /etc/kernel/install.d/zzz-ks-uki.install
 
 echo do_symlinks = no > /etc/kernel-img.conf
 echo root=LABEL=r console=tty0 console=ttyS0 > /etc/kernel/cmdline
