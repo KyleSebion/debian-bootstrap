@@ -109,9 +109,7 @@ apt -y install wireless-regdb # to get rid of: failed to load regulatory.db
 sed -i -re '/\slocalhost(\s|$)/s/$/ debian/' /etc/hosts
 CEOF
 
-mount -m -B "$CHROOT_DIR"/var/lib/sbctl /var/lib/sbctl
-sbctl enroll-keys -m
-umount /var/lib/sbctl
+mount -m -B {"$CHROOT_DIR",}/var/lib/sbctl; sbctl enroll-keys -m; umount /var/lib/sbctl
 genfstab -L "$CHROOT_DIR" | grep LABEL=[er] > "$CHROOT_DIR"/etc/fstab
 umount -R "$CHROOT_DIR"
 efibootmgr -c -d "$INSTALL_DEV" -p 1 -l '\EFI\systemd\systemd-bootx64.efi' -L 'Linux Boot Manager' # kludge because installing systemd-boot in systemd-nspawn doesn't add a boot entry
