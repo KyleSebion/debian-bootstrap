@@ -70,7 +70,7 @@ offs[linux]=$(getOffsetAfter initrd)
 declare -a args
 for s in "${!offs[@]}"; do args+=(--add-section ".$s=${path[$s]}" --change-section-vma ".$s=$(printf 0x%x "${offs[$s]}")"); done
 objcopy "${args[@]}" "${path[stub]}" "${path[efiout]}"
-/usr/local/sbin/sbctl sign "${path[efiout]}"
+/usr/local/sbin/sbctl sign "${path[efiout]}" &> /dev/null
 rm -fr "${path[uname]}" "/efi/$et/$un" "/efi/loader/entries/$et-$un.conf"
 [ -d "/efi/$et" ] && rmdir --ignore-fail-on-non-empty "/efi/$et" || true
 KS-UKI
