@@ -111,7 +111,7 @@ apt -y install wireless-regdb # to get rid of: failed to load regulatory.db
 sed -i -re '/\slocalhost(\s|$)/s/$/ debian/' /etc/hosts
 CEOF
 
-systemd-nspawn --bind /dev/disk/by-partlabel/r --bind "$(realpath /dev/disk/by-partlabel/r)" --bind /dev/mapper/r --bind "$(realpath /dev/mapper/r)" --bind /dev/mapper/control -PD "$CHROOT_DIR" /bin/bash -x << 'CEOF'
+systemd-nspawn --bind={/dev/disk/by-partlabel/r,"$(realpath /dev/disk/by-partlabel/r)",/dev/mapper/r,"$(realpath /dev/mapper/r)",/dev/mapper/control} -PD "$CHROOT_DIR" /bin/bash -x << 'CEOF'
 debconf-set-selections <<< 'keyboard-configuration keyboard-configuration/variant select English (US)'
 debconf-set-selections <<< 'console-setup console-setup/codeset47 select Guess optimal character set'
 echo r /dev/disk/by-partlabel/r none x-initrd.attach >> /etc/crypttab
