@@ -7,12 +7,14 @@ SBCTL=/usr/local/sbin/sbctl
 SIGNPKG=/root/ks-systemd-boot-signer_1.0_all.deb
 
 apt update
-apt -y install parted dosfstools arch-install-scripts systemd-container mmdebstrap efibootmgr ruby-rubygems; gem install fpm
+apt -y install parted dosfstools arch-install-scripts systemd-container mmdebstrap efibootmgr cryptsetup ruby-rubygems; gem install fpm
 wipefs -a "$INSTALL_DEV"*
 parted "$INSTALL_DEV" mklabel gpt mkpart e fat32 4MiB 1020MiB mkpart r 1020MiB 3068MiB set 1 esp on
 udevadm settle
 mkfs.fat -F 32 -n e /dev/disk/by-partlabel/e
-mkfs.ext4 -L r /dev/disk/by-partlabel/r
+echo -n password | cryptsetup luksFormat /dev/disk/by-partlabel/r   -
+echo    password | cryptsetup luksOpen   /dev/disk/by-partlabel/r r -
+mkfs.ext4 -L r $([ -b /dev/mapper/r ] && echo /dev/mapper/r || echo /dev/disk/by-partlabel/r)
 mount LABEL=r "$CHROOT_DIR"
 mmdebstrap --aptopt='Acquire::http { Proxy "http://10.10.10.1:3142"; }' --skip=cleanup/apt,cleanup/reproducible bookworm "$CHROOT_DIR"
 mount -m LABEL=e "$CHROOT_DIR"/efi
@@ -109,7 +111,15 @@ apt -y install wireless-regdb # to get rid of: failed to load regulatory.db
 sed -i -re '/\slocalhost(\s|$)/s/$/ debian/' /etc/hosts
 CEOF
 
+systemd-nspawn --bind /dev/disk/by-partlabel/r --bind "$(realpath /dev/disk/by-partlabel/r)" --bind /dev/mapper/r --bind "$(realpath /dev/mapper/r)" --bind /dev/mapper/control -PD "$CHROOT_DIR" /bin/bash -x << 'CEOF'
+debconf-set-selections <<< 'keyboard-configuration keyboard-configuration/variant select English (US)'
+debconf-set-selections <<< 'console-setup console-setup/codeset47 select Guess optimal character set'
+echo r /dev/disk/by-partlabel/r none x-initrd.attach >> /etc/crypttab
+apt -y install cryptsetup-initramfs tpm2-tools
+CEOF
+
 mount -m -B {"$CHROOT_DIR",}/var/lib/sbctl; sbctl enroll-keys -m; umount /var/lib/sbctl
 genfstab -L "$CHROOT_DIR" | grep LABEL=[er] > "$CHROOT_DIR"/etc/fstab
 umount -R "$CHROOT_DIR"
+[ -b /dev/mapper/r ] && cryptsetup luksClose r
 efibootmgr -c -d "$INSTALL_DEV" -p 1 -l '\EFI\systemd\systemd-bootx64.efi' -L 'Linux Boot Manager' # kludge because installing systemd-boot in systemd-nspawn doesn't add a boot entry
