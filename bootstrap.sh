@@ -90,6 +90,12 @@ printf "$st\n" '$1' remove | tee > /dev/null /etc/kernel/postrm.d/zzz-ks-uki
 printf "$st\n" '$2' '$1'   | tee > /dev/null /etc/kernel/install.d/zzz-ks-uki.install # needed for systemd-boot purge then install because a systemd-boot install script looks for kernels to kernel-install add to /efi
 chmod 755 /usr/local/sbin/ks-uki /etc/kernel/post{inst,rm}.d/zzz-ks-uki /etc/initramfs/post-update.d/zzz-ks-uki /etc/kernel/install.d/zzz-ks-uki.install
 
+# LUKS related
+debconf-set-selections <<< 'keyboard-configuration keyboard-configuration/variant select English (US)'
+debconf-set-selections <<< 'console-setup console-setup/codeset47 select Guess optimal character set'
+apt -y install cryptsetup-initramfs tpm2-tools
+echo r PARTLABEL=r none x-initrd.attach >> /etc/crypttab
+
 echo do_symlinks = no > /etc/kernel-img.conf
 echo root=LABEL=r console=tty0 console=ttyS0 > /etc/kernel/cmdline
 apt -y install linux-image-"$(dpkg --print-architecture)"
@@ -111,11 +117,6 @@ echo 'user ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/010_user-nopasswd
 
 apt -y install wireless-regdb # to get rid of: failed to load regulatory.db
 sed -i -re '/\slocalhost(\s|$)/s/$/ debian/' /etc/hosts
-
-debconf-set-selections <<< 'keyboard-configuration keyboard-configuration/variant select English (US)'
-debconf-set-selections <<< 'console-setup console-setup/codeset47 select Guess optimal character set'
-echo r PARTLABEL=r none x-initrd.attach > /etc/crypttab
-apt -y install cryptsetup-initramfs tpm2-tools
 CEOF
 
 genfstab -L "$CHROOT_DIR" | grep LABEL=[er] > "$CHROOT_DIR"/etc/fstab
