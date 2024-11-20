@@ -1,19 +1,20 @@
 #!/bin/bash -x
 
-CHROOT_DIR=/mnt
-INSTALL_DEV=/dev/vda # this drive will be wiped!
-UKI_IMG=/root/uki.bmp
-SBCTL=/usr/local/sbin/sbctl
-SIGNPKG=/root/ks-systemd-boot-signer_1.0_all.deb
+export CHROOT_DIR=/mnt
+export INSTALL_DEV=/dev/vda # this drive will be wiped!
+export UKI_IMG=/root/uki.bmp
+export SBCTL=/usr/local/sbin/sbctl
+export SIGNPKG=/root/ks-systemd-boot-signer_1.0_all.deb
+export LUKS_PASS=password
 
 apt update
-apt -y install parted dosfstools arch-install-scripts systemd-container mmdebstrap efibootmgr cryptsetup ruby-rubygems; gem install fpm
+apt -y install parted dosfstools arch-install-scripts mmdebstrap efibootmgr cryptsetup ruby-rubygems; gem install fpm
 wipefs -a "$INSTALL_DEV"*
 parted "$INSTALL_DEV" mklabel gpt mkpart e fat32 4MiB 1020MiB mkpart r 1020MiB 3068MiB set 1 esp on
 udevadm settle
 mkfs.fat -F 32 -n e /dev/disk/by-partlabel/e
-echo -n password | cryptsetup luksFormat /dev/disk/by-partlabel/r   -
-echo    password | cryptsetup luksOpen   /dev/disk/by-partlabel/r r -
+echo -n "$LUKS_PASS" | cryptsetup luksFormat /dev/disk/by-partlabel/r   -
+echo    "$LUKS_PASS" | cryptsetup luksOpen   /dev/disk/by-partlabel/r r -
 mkfs.ext4 -L r $([ -b /dev/mapper/r ] && echo /dev/mapper/r || echo /dev/disk/by-partlabel/r)
 mount LABEL=r "$CHROOT_DIR"
 mmdebstrap --aptopt='Acquire::http { Proxy "http://10.10.10.1:3142"; }' --skip=cleanup/apt,cleanup/reproducible bookworm "$CHROOT_DIR"
@@ -29,15 +30,16 @@ fpm -n ks-systemd-boot-signer -s empty -t deb --deb-interest "$trigf" -p "$SIGNP
   --after-remove  <(bashScript 'rm -f "$trigf".signed')
 mv "$SIGNPKG" "$CHROOT_DIR$SIGNPKG"
 
-systemd-nspawn -E UKI_IMG="$UKI_IMG" -E SBCTL="$SBCTL" -E SIGNPKG="$SIGNPKG" -PD "$CHROOT_DIR" /bin/bash -x << 'CEOF'
+arch-chroot "$CHROOT_DIR" /bin/bash -x << 'CEOF'
 mv /etc/apt/apt.conf.d/99mmdebstrap /etc/apt/apt.conf.d/proxy
 export DEBIAN_FRONTEND=noninteractive
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/default_environment_locale select en_US.UTF-8'
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/locales_to_be_generated multiselect en_US.UTF-8 UTF-8'
-apt -y install locales
+LANG=C.UTF-8 apt -y install locales
 
 # systemd-boot + SecureBoot
 sbctl create-keys
+sbctl enroll-keys -m
 apt -y install "$SIGNPKG"; rm "$SIGNPKG"
 apt -y install systemd-boot
 
@@ -109,17 +111,13 @@ echo 'user ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/010_user-nopasswd
 
 apt -y install wireless-regdb # to get rid of: failed to load regulatory.db
 sed -i -re '/\slocalhost(\s|$)/s/$/ debian/' /etc/hosts
-CEOF
 
-systemd-nspawn --bind={/dev/disk/by-partlabel/r,"$(realpath /dev/disk/by-partlabel/r)",/dev/mapper/r,"$(realpath /dev/mapper/r)",/dev/mapper/control} -PD "$CHROOT_DIR" /bin/bash -x << 'CEOF'
 debconf-set-selections <<< 'keyboard-configuration keyboard-configuration/variant select English (US)'
 debconf-set-selections <<< 'console-setup console-setup/codeset47 select Guess optimal character set'
-echo r /dev/disk/by-partlabel/r none x-initrd.attach >> /etc/crypttab
+echo r PARTLABEL=r none x-initrd.attach > /etc/crypttab
 apt -y install cryptsetup-initramfs tpm2-tools
 CEOF
 
-mount -m -B {"$CHROOT_DIR",}/var/lib/sbctl; sbctl enroll-keys -m; umount /var/lib/sbctl
 genfstab -L "$CHROOT_DIR" | grep LABEL=[er] > "$CHROOT_DIR"/etc/fstab
 umount -R "$CHROOT_DIR"
 [ -b /dev/mapper/r ] && cryptsetup luksClose r
-efibootmgr -c -d "$INSTALL_DEV" -p 1 -l '\EFI\systemd\systemd-bootx64.efi' -L 'Linux Boot Manager' # kludge because installing systemd-boot in systemd-nspawn doesn't add a boot entry
