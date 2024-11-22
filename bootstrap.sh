@@ -94,8 +94,33 @@ chmod 755 /usr/local/sbin/ks-uki /etc/kernel/post{inst,rm}.d/zzz-ks-uki /etc/ini
 debconf-set-selections <<< 'keyboard-configuration keyboard-configuration/variant select English (US)'
 debconf-set-selections <<< 'console-setup console-setup/codeset47 select Guess optimal character set'
 apt -y install cryptsetup-initramfs tpm2-tools
-echo r PARTLABEL=r none x-initrd.attach >> /etc/crypttab
+echo r PARTLABEL=r none x-initrd.attach,tpm2-device=auto >> /etc/crypttab
 
+# LUKS TPM kludge (for tpm2-device=auto in crypttab)
+# Thanks to: https://github.com/wmcelderry/systemd_with_tpm2 and https://github.com/BoskyWSMFN/systemd_with_tpm2
+apt -y install libtss2-dev
+patch=(-e 's/([^\n]*\n)([^\n]*)# unlock via keyfile([^\n]*\n){3}/        if ! ([ -z "${CRYPTTAB_OPTION_keyscript+x}" ] \&\& '\
+'([ -n "${CRYPTTAB_OPTION_tpm2_device}" ] || [ "$CRYPTTAB_KEY" != "none" ]) \&\& unlock_mapping "$CRYPTTAB_KEY"); then\n/')
+sed -i -zr "${patch[@]}" /usr/share/initramfs-tools/scripts/local-top/cryptroot
+patch=()
+patch+=(-e 's/(CRYPTTAB_OPTION_no_write_workqueue)/\1 \\\n             CRYPTTAB_OPTION_tpm2_device/')
+patch+=(-e 's/(no-write-workqueue\) OPTION="no_write_workqueue";;)/\1\n        tpm2-device) OPTION="tpm2_device";;/')
+patch+=(-e 's/(        # and now the flags)/        tpm2-device) ;;\n\1/')
+patch+=(-e 's@(fi\n\n)(    /sbin/cryptsetup -T1 \\)@\1    if [[ -z "${CRYPTTAB_OPTION_tpm2_device}" ]] || [ "$keyfile" = "-" ]; then\n\n\2@')
+patch+=(-e 's@(open -- "\$CRYPTTAB_SOURCE" "\$CRYPTTAB_NAME")@\1\n    else\n        /lib/systemd/systemd-cryptsetup attach '\
+'"${CRYPTTAB_NAME}" "${CRYPTTAB_SOURCE}" "${keyfile}" "tpm2-device=${CRYPTTAB_OPTION_tpm2_device},headless"\n    fi\n@')
+sed -i -zr "${patch[@]}" /usr/lib/cryptsetup/functions
+cat << 'HOOK' > /etc/initramfs-tools/hooks/systemd_cryptsetup_hook
+#!/bin/sh
+case "$1" in prereqs) exit 0;; esac
+. /usr/share/initramfs-tools/hook-functions
+copy_exec /lib/systemd/systemd-cryptsetup /lib/systemd
+for i in /lib/x86_64-linux-gnu/libtss2*; do copy_exec ${i} /lib/x86_64-linux-gnu; done
+for i in /lib/x86_64-linux-gnu/cryptsetup/*; do copy_file ${i} ${i}; done
+HOOK
+chmod +x /etc/initramfs-tools/hooks/systemd_cryptsetup_hook
+
+# Kernel
 echo do_symlinks = no > /etc/kernel-img.conf
 echo root=LABEL=r console=tty0 console=ttyS0 > /etc/kernel/cmdline
 apt -y install linux-image-"$(dpkg --print-architecture)"
@@ -122,3 +147,5 @@ CEOF
 genfstab -L "$CHROOT_DIR" | grep LABEL=[er] > "$CHROOT_DIR"/etc/fstab
 umount -R "$CHROOT_DIR"
 [ -b /dev/mapper/r ] && cryptsetup luksClose r
+
+printf %s\\n 'On boot, enter LUKS_PASS.' 'After boot, run: systemd-cryptenroll /dev/disk/by-partlabel/r'
