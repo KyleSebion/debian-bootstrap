@@ -13,8 +13,8 @@ parted "$INSTALL_DEV" mklabel gpt mkpart e fat32 4MiB 1020MiB mkpart r 1020MiB 3
 udevadm settle
 mkfs.fat -F 32 -n e /dev/disk/by-partlabel/e
 head -c 512 /dev/urandom > /r.key # r.key will be deleted and replaced with recovery key and tpm2 after first root sign-in
-cryptsetup -d /r.key luksFormat /dev/disk/by-partlabel/r
-cryptsetup -d /r.key luksOpen   /dev/disk/by-partlabel/r r
+cryptsetup -q -d /r.key luksFormat /dev/disk/by-partlabel/r
+cryptsetup    -d /r.key luksOpen   /dev/disk/by-partlabel/r r
 mkfs.ext4 -L r $([ -b /dev/mapper/r ] && echo /dev/mapper/r || echo /dev/disk/by-partlabel/r)
 mount LABEL=r "$CHROOT_DIR"
 mmdebstrap --aptopt='Acquire::http { Proxy "http://10.10.10.1:3142"; }' --skip=cleanup/apt,cleanup/reproducible bookworm "$CHROOT_DIR"
