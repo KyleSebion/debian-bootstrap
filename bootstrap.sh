@@ -84,7 +84,7 @@ cmd=$1 et=$2 un=$3
 efiout=/efi/EFI/Linux/"$et"-"$un".efi
 if [ "$cmd"  = remove ]; then rm -f "$efiout"; exit 0; fi
 if [ "$cmd" != add    ]; then echo bad cmd $cmd >&2;   exit 1; fi
-/usr/local/sbin/sbctl bundle --initramfs /boot/initrd.img-"$un"  --kernel-img /boot/vmlinuz-"$un" --splash-img /etc/ks-uki/splash.bmp "$efiout" &> /dev/null
+/usr/local/sbin/sbctl bundle --initramfs /boot/initrd.img-"$un" --kernel-img /boot/vmlinuz-"$un" --splash-img /etc/ks-uki/splash.bmp "$efiout" &> /dev/null
 /usr/local/sbin/sbctl sign "$efiout" &> /dev/null
 rm -fr "/efi/$et/$un" "/efi/loader/entries/$et-$un.conf"
 [ -d "/efi/$et" ] && rmdir --ignore-fail-on-non-empty "/efi/$et" || true
