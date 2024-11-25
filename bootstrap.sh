@@ -31,7 +31,7 @@ cp "$SBCTL" "$CHROOT_DIR$SBCTL"
 ##  --after-remove  <(bashScript 'rm -f "$trigf".signed')
 ##mv "$SIGNPKG" "$CHROOT_DIR$SIGNPKG"
 
-arch-chroot "$CHROOT_DIR" /bin/bash -x << 'CEOF'
+arch-chroot "$CHROOT_DIR" bash -x << 'CEOF'
 mv /etc/apt/apt.conf.d/99mmdebstrap /etc/apt/apt.conf.d/proxy
 export DEBIAN_FRONTEND=noninteractive
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/default_environment_locale select en_US.UTF-8'
@@ -75,32 +75,12 @@ mv "$UKI_IMG" /etc/ks-uki/splash.bmp
 cat << 'KS-UKI' > /usr/local/sbin/ks-uki
 #!/bin/bash -e
 cmd=$1 et=$2 un=$3
-declare -A path
-path[efiout]=/efi/EFI/Linux/"$et"-"$un".efi
-if [ "$cmd"  = remove ]; then rm -f "${path[efiout]}"; exit 0; fi
+efiout=/efi/EFI/Linux/"$et"-"$un".efi
+if [ "$cmd"  = remove ]; then rm -f "$efiout"; exit 0; fi
 if [ "$cmd" != add    ]; then echo bad cmd $cmd >&2;   exit 1; fi
-path[stub]=/usr/lib/systemd/boot/efi/linuxx64.efi.stub
-path[osrel]=/usr/lib/os-release
-path[uname]=$(mktemp); echo "$un" > "${path[uname]}"
-path[cmdline]=/etc/kernel/cmdline
-path[splash]=/etc/ks-uki/splash.bmp
-path[initrd]=/boot/initrd.img-"$un"
-path[linux]=/boot/vmlinuz-"$un"
-alignment="$(objdump -p "${path[stub]}" | mawk '$1=="SectionAlignment" { print(("0x"$2)+0) }')"
-getAligned () { echo $(( $1 + $alignment - $1 % $alignment )); }
-declare -A offs
-getOffsetAfter () { getAligned $(( offs[$1] + $( stat -Lc%s "${path[$1]}" ) )); }
-offs[osrel]=$(getAligned $(objdump -h "${path[stub]}" | mawk 'NF==7 {s=("0x"$3)+0;o=("0x"$4)+0} END {print(s+o)}'))
-offs[uname]=$(getOffsetAfter osrel)
-offs[cmdline]=$(getOffsetAfter uname)
-offs[splash]=$(getOffsetAfter cmdline)
-offs[initrd]=$(getOffsetAfter splash)
-offs[linux]=$(getOffsetAfter initrd)
-declare -a args
-for s in "${!offs[@]}"; do args+=(--add-section ".$s=${path[$s]}" --change-section-vma ".$s=$(printf 0x%x "${offs[$s]}")"); done
-objcopy "${args[@]}" "${path[stub]}" "${path[efiout]}"
-/usr/local/sbin/sbctl sign "${path[efiout]}" &> /dev/null
-rm -fr "${path[uname]}" "/efi/$et/$un" "/efi/loader/entries/$et-$un.conf"
+/usr/local/sbin/sbctl bundle --initramfs /boot/initrd.img-"$un"  --kernel-img /boot/vmlinuz-"$un" --splash-img /etc/ks-uki/splash.bmp "$efiout" &> /dev/null
+/usr/local/sbin/sbctl sign "$efiout" &> /dev/null
+rm -fr "/efi/$et/$un" "/efi/loader/entries/$et-$un.conf"
 [ -d "/efi/$et" ] && rmdir --ignore-fail-on-non-empty "/efi/$et" || true
 KS-UKI
 st=$(cat << 'KS-UKI'
