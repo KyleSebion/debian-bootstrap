@@ -5,7 +5,6 @@ export INSTALL_DEV=/dev/vda # this drive will be wiped!
 export UKI_IMG=/root/uki.bmp
 export SBCTL=/usr/local/sbin/sbctl
 export SIGNPKG=/root/ks-systemd-boot-signer_1.0_all.deb
-export LUKS_PASS=password
 
 apt update
 apt -y install parted dosfstools arch-install-scripts mmdebstrap efibootmgr cryptsetup
@@ -13,14 +12,17 @@ wipefs -a "$INSTALL_DEV"*
 parted "$INSTALL_DEV" mklabel gpt mkpart e fat32 4MiB 1020MiB mkpart r 1020MiB 3068MiB set 1 esp on
 udevadm settle
 mkfs.fat -F 32 -n e /dev/disk/by-partlabel/e
-echo -n "$LUKS_PASS" | cryptsetup luksFormat /dev/disk/by-partlabel/r   -
-echo    "$LUKS_PASS" | cryptsetup luksOpen   /dev/disk/by-partlabel/r r -
+head -c 512 /dev/urandom > /r.key # r.key will be deleted and replaced with recovery key and tpm2 after first root sign-in
+cryptsetup -d /r.key luksFormat /dev/disk/by-partlabel/r
+cryptsetup -d /r.key luksOpen   /dev/disk/by-partlabel/r r
 mkfs.ext4 -L r $([ -b /dev/mapper/r ] && echo /dev/mapper/r || echo /dev/disk/by-partlabel/r)
 mount LABEL=r "$CHROOT_DIR"
 mmdebstrap --aptopt='Acquire::http { Proxy "http://10.10.10.1:3142"; }' --skip=cleanup/apt,cleanup/reproducible bookworm "$CHROOT_DIR"
 mount -m LABEL=e "$CHROOT_DIR"/efi
 cp "$UKI_IMG" "$CHROOT_DIR$UKI_IMG"
 cp "$SBCTL" "$CHROOT_DIR$SBCTL"
+mv /r.key "$CHROOT_DIR/r.key"
+chmod 600 "$CHROOT_DIR/r.key"
 
 # Create package to auto-sign systemd-boot
 ##apt -y install ruby-rubygems; gem install fpm
@@ -37,6 +39,10 @@ export DEBIAN_FRONTEND=noninteractive
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/default_environment_locale select en_US.UTF-8'
 LANG=C.UTF-8 debconf-set-selections <<< 'locales locales/locales_to_be_generated multiselect en_US.UTF-8 UTF-8'
 LANG=C.UTF-8 apt -y install locales
+
+sed -i -re '/#force_color_prompt=yes/s/^#//' /etc/skel/.bashrc
+echo -e 'alias lh=\x27ls -lhA\x27' >> /etc/skel/.bashrc
+cp /etc/skel/.bashrc /root/
 
 # systemd-boot + SecureBoot
 sbctl create-keys
@@ -99,7 +105,21 @@ chmod 755 /usr/local/sbin/ks-uki /etc/kernel/post{inst,rm}.d/zzz-ks-uki /etc/ini
 debconf-set-selections <<< 'keyboard-configuration keyboard-configuration/variant select English (US)'
 debconf-set-selections <<< 'console-setup console-setup/codeset47 select Guess optimal character set'
 apt -y install cryptsetup-initramfs tpm2-tools
-echo r PARTLABEL=r none x-initrd.attach,tpm2-device=auto >> /etc/crypttab
+echo r PARTLABEL=r /r.key x-initrd.attach >> /etc/crypttab
+echo 'KEYFILE_PATTERN="/r.key"' >> /etc/cryptsetup-initramfs/conf-hook
+
+# Switch LUKS to recovery key and tpm2 next root sign-in
+cat << 'LUKS' > /root/finishLUKS.sh
+systemd-cryptenroll --unlock-key-file=/r.key /dev/disk/by-partlabel/r --recovery-key
+systemd-cryptenroll --unlock-key-file=/r.key /dev/disk/by-partlabel/r --tpm2-device=auto --wipe-slot=password
+sed -i -re 's@/r.key @none tpm2-device=auto,@' /etc/crypttab
+sed -i -re '/KEYFILE_PATTERN="\/r\.key"/d' /etc/cryptsetup-initramfs/conf-hook
+rm /r.key
+update-initramfs -u
+sed -i -re '/finishLUKS.sh/d' /root/.bashrc
+rm /root/finishLUKS.sh
+LUKS
+echo bash /root/finishLUKS.sh >> /root/.bashrc
 
 # LUKS TPM kludge (for tpm2-device=auto in crypttab)
 # Thanks to: https://github.com/wmcelderry/systemd_with_tpm2 and https://github.com/BoskyWSMFN/systemd_with_tpm2
@@ -135,10 +155,6 @@ systemctl enable systemd-networkd
 
 tasksel install standard ssh-server
 
-sed -i -re '/#force_color_prompt=yes/s/^#//' /etc/skel/.bashrc
-echo -e 'alias lh=\x27ls -lhA\x27' >> /etc/skel/.bashrc
-cp /etc/skel/.bashrc /root/
-
 apt -y install sudo
 adduser --disabled-password --comment '' user
 adduser user sudo
@@ -152,5 +168,3 @@ CEOF
 genfstab -L "$CHROOT_DIR" | grep LABEL=[er] > "$CHROOT_DIR"/etc/fstab
 umount -R "$CHROOT_DIR"
 [ -b /dev/mapper/r ] && cryptsetup luksClose r
-
-printf %s\\n 'On boot, enter LUKS_PASS.' 'After boot, run: systemd-cryptenroll /dev/disk/by-partlabel/r'
