@@ -106,7 +106,7 @@ debconf-set-selections <<< 'keyboard-configuration keyboard-configuration/varian
 debconf-set-selections <<< 'console-setup console-setup/codeset47 select Guess optimal character set'
 apt -y install cryptsetup-initramfs tpm2-tools
 echo r PARTLABEL=r /r.key x-initrd.attach >> /etc/crypttab
-echo 'KEYFILE_PATTERN="/r.key"' >> /etc/cryptsetup-initramfs/conf-hook
+echo KEYFILE_PATTERN=/r.key >> /etc/cryptsetup-initramfs/conf-hook
 echo UMASK=0077 > /etc/initramfs-tools/conf.d/private-umask
 
 # Switch LUKS to recovery key and tpm2 next root sign-in
@@ -114,7 +114,7 @@ cat << 'LUKS' > /root/finishLUKS.sh
 systemd-cryptenroll --unlock-key-file=/r.key /dev/disk/by-partlabel/r --recovery-key
 systemd-cryptenroll --unlock-key-file=/r.key /dev/disk/by-partlabel/r --tpm2-device=auto --wipe-slot=password
 sed -i -re 's@/r.key @none tpm2-device=auto,@' /etc/crypttab
-sed -i -re '/KEYFILE_PATTERN="\/r\.key"/d' /etc/cryptsetup-initramfs/conf-hook
+sed -i -re '\@KEYFILE_PATTERN=/r.key@d' /etc/cryptsetup-initramfs/conf-hook
 rm /etc/initramfs-tools/conf.d/private-umask
 rm /r.key
 update-initramfs -u
