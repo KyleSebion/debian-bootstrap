@@ -5,6 +5,7 @@ export INSTALL_DEV=/dev/vda # this drive will be wiped!
 export UKI_IMG=/root/uki.bmp
 export SBCTL=/usr/local/sbin/sbctl
 export SIGNPKG=/root/ks-systemd-boot-signer_1.0_all.deb
+export TMPLUKSPASS=$(head -c 32 /dev/urandom | base64)
 
 apt update
 apt -y install parted dosfstools arch-install-scripts mmdebstrap efibootmgr cryptsetup
@@ -12,17 +13,14 @@ wipefs -a "$INSTALL_DEV"*
 parted "$INSTALL_DEV" mklabel gpt mkpart e fat32 4MiB 1020MiB mkpart r 1020MiB 3068MiB set 1 esp on
 udevadm settle
 mkfs.fat -F 32 -n e /dev/disk/by-partlabel/e
-head -c 512 /dev/urandom > /r.key # r.key will be deleted and replaced with recovery key and tpm2 after first root sign-in
-cryptsetup -q -d /r.key luksFormat /dev/disk/by-partlabel/r
-cryptsetup    -d /r.key luksOpen   /dev/disk/by-partlabel/r r
+echo -n "$TMPLUKSPASS" | cryptsetup -d - luksFormat /dev/disk/by-partlabel/r
+echo -n "$TMPLUKSPASS" | cryptsetup -d - luksOpen   /dev/disk/by-partlabel/r r
 mkfs.ext4 -L r $([ -b /dev/mapper/r ] && echo /dev/mapper/r || echo /dev/disk/by-partlabel/r)
 mount LABEL=r "$CHROOT_DIR"
 mmdebstrap --aptopt='Acquire::http { Proxy "http://10.10.10.1:3142"; }' --skip=cleanup/apt,cleanup/reproducible bookworm "$CHROOT_DIR"
 mount -m LABEL=e "$CHROOT_DIR"/efi
 cp "$UKI_IMG" "$CHROOT_DIR$UKI_IMG"
 cp "$SBCTL" "$CHROOT_DIR$SBCTL"
-mv /r.key "$CHROOT_DIR/r.key"
-chmod 600 "$CHROOT_DIR/r.key"
 
 # Create package to auto-sign systemd-boot
 ##apt -y install ruby-rubygems; gem install fpm
@@ -104,24 +102,60 @@ chmod 755 /usr/local/sbin/ks-uki /etc/kernel/post{inst,rm}.d/zzz-ks-uki /etc/ini
 # LUKS related
 debconf-set-selections <<< 'keyboard-configuration keyboard-configuration/variant select English (US)'
 debconf-set-selections <<< 'console-setup console-setup/codeset47 select Guess optimal character set'
-apt -y install cryptsetup-initramfs tpm2-tools
-echo r PARTLABEL=r /r.key x-initrd.attach >> /etc/crypttab
-echo KEYFILE_PATTERN=/r.key >> /etc/cryptsetup-initramfs/conf-hook
-echo UMASK=0077 > /etc/initramfs-tools/conf.d/private-umask
+apt -y install cryptsetup-initramfs tpm2-tools xxd
+echo r PARTLABEL=r none tpm2-device=auto,x-initrd.attach >> /etc/crypttab
 
-# Switch LUKS to recovery key and tpm2 next root sign-in
-cat << 'LUKS' > /root/finishLUKS.sh
-systemd-cryptenroll --unlock-key-file=/r.key /dev/disk/by-partlabel/r --recovery-key
-systemd-cryptenroll --unlock-key-file=/r.key /dev/disk/by-partlabel/r --tpm2-device=auto --wipe-slot=password
-sed -i -re 's@/r.key @none tpm2-device=auto,@' /etc/crypttab
-sed -i -re '\@KEYFILE_PATTERN=/r.key@d' /etc/cryptsetup-initramfs/conf-hook
-rm /etc/initramfs-tools/conf.d/private-umask
-rm /r.key
-update-initramfs -u
-sed -i -re '/finishLUKS.sh/d' /root/.bashrc
-rm /root/finishLUKS.sh
-LUKS
-echo bash /root/finishLUKS.sh >> /root/.bashrc
+# Calculate PCR7
+switchHexEndian () { grep -o .. | tac | tr -d \\n; }
+sha256UefiVariableData () {
+  vn=$1 un=$2 vd=$3
+  bvn=$(echo -n "$vn" | sed -re 's/(..)(..)(..)(..)-(..)(..)-(..)(..)-(....)-/\4\3\2\1\6\5\8\7\9/')
+  bun=$(echo -n "$un" | iconv -t UTF-16LE | xxd -p | tr -d '[:space:]')
+  bvd=$(echo -n "$vd" | tr -d '[:space:]')
+  szbun=$(<<< $bun awk '{printf("%016x",length($0)/4)}' | switchHexEndian)
+  szbvd=$(<<< $bvd awk '{printf("%016x",length($0)/2)}' | switchHexEndian)
+  <<< $bvn$szbun$szbvd$bun$bvd xxd -r -p | sha256sum | cut -d ' ' -f 1
+}
+declare -A efiguid
+efiguid+=( SecureBoot 8be4df61-93ca-11d2-aa0d-00e098032b8c )
+efiguid+=( PK         8be4df61-93ca-11d2-aa0d-00e098032b8c )
+efiguid+=( KEK        8be4df61-93ca-11d2-aa0d-00e098032b8c )
+efiguid+=( db         d719b2cb-3d3a-4596-a3bc-dad00e67656f )
+efiguid+=( dbx        d719b2cb-3d3a-4596-a3bc-dad00e67656f )
+getEfiVar () { f=/sys/firmware/efi/efivars/"$1-${efiguid[$1]}"; test -e "$f" && cat "$f" | tail -c +$((1+4)) | xxd -p | tr -d '[:space:]'; }
+sha256EfiVarWithData () { sha256UefiVariableData "${efiguid[$1]}" "$1" "$2"; }
+sha256EfiVar () { sha256EfiVarWithData "$1" "$(getEfiVar "$1")"; }
+pcr7=0000000000000000000000000000000000000000000000000000000000000000
+extendPcr7 () { pcr7=$(echo "$pcr7$1" | xxd -r -p | sha256sum | cut -d ' ' -f 1); }
+extendPcr7 "$(sha256EfiVarWithData SecureBoot 01)"
+extendPcr7 "$(sha256EfiVar PK)"
+extendPcr7 "$(sha256EfiVar KEK)"
+extendPcr7 "$(sha256EfiVar db)"
+extendPcr7 "$(sha256EfiVar dbx)"
+extendPcr7 "$(echo 00000000 | xxd -r -p | sha256sum | cut -d ' ' -f 1)"
+bdb=$(getEfiVar db)
+szbdb0=$((0x$(echo "$bdb" | tail -c +$((1+16*2)) | head -c 8 | switchHexEndian)))
+extendPcr7 "$(sha256EfiVarWithData db "$(echo "$bdb" | head -c $((szbdb0*2)) | tail -c +$((1+28*2)))")"
+
+# Enroll TPM2 with calculated PCR7
+d=$(mktemp -d)
+pushd "$d" &> /dev/null
+echo "$pcr7" | xxd -r -p > pcr.bin
+tpm2_startauthsession -S pcr.ctx
+tpm2_policypcr -S pcr.ctx -l sha256:7 -f pcr.bin -L pol.bin
+tpm2_flushcontext pcr.ctx
+tpm2_createprimary -C o -c prim.ctx -g sha256 -G ecc -a 'restricted|decrypt|fixedtpm|fixedparent|sensitivedataorigin|userwithauth'
+luksPass=$(head -c 32 /dev/urandom | base64)
+echo -n "$luksPass" | base64 -d | tpm2_create -C prim.ctx -u public.obj -r private.obj -L pol.bin -i-
+echo -n "$luksPass" | cryptsetup -d <(echo -n "$TMPLUKSPASS") --new-keyfile - luksAddKey /dev/disk/by-partlabel/r
+unset luksPass
+cryptsetup luksKillSlot -q /dev/disk/by-partlabel/r 0
+tpm2PolHash=$(xxd -p pol.bin | tr -d ' \n')
+tpm2Blob=$(cat private.obj public.obj | base64 | tr -d ' \n')
+tokenFmt='{"type":"systemd-tpm2","keyslots":["1"],"tpm2-blob":"%s","tpm2-pcrs":[7],"tpm2-pcr-bank":"sha256","tpm2-primary-alg":"ecc","tpm2-policy-hash":"%s","tpm2-pin":false}'
+printf "$tokenFmt" "$tpm2Blob" "$tpm2PolHash" | cryptsetup token import --json-file - /dev/disk/by-partlabel/r
+popd &> /dev/null
+rm -r "$d"
 
 # LUKS TPM kludge (for tpm2-device=auto in crypttab)
 # Thanks to: https://github.com/wmcelderry/systemd_with_tpm2 and https://github.com/BoskyWSMFN/systemd_with_tpm2
