@@ -148,8 +148,8 @@ tpm2_createprimary -C o -c prim.ctx -g sha256 -G ecc -a 'restricted|decrypt|fixe
 luksPass=$(head -c 32 /dev/urandom | base64)
 echo -n "$luksPass" | base64 -d | tpm2_create -C prim.ctx -u public.obj -r private.obj -L pol.bin -i-
 echo -n "$luksPass" | cryptsetup -d <(echo -n "$TMPLUKSPASS") --new-keyfile - luksAddKey /dev/disk/by-partlabel/r
+echo -n "$luksPass" | cryptsetup luksKillSlot /dev/disk/by-partlabel/r 0
 unset luksPass
-cryptsetup luksKillSlot -q /dev/disk/by-partlabel/r 0
 tpm2PolHash=$(xxd -p pol.bin | tr -d ' \n')
 tpm2Blob=$(cat private.obj public.obj | base64 | tr -d ' \n')
 tokenFmt='{"type":"systemd-tpm2","keyslots":["1"],"tpm2-blob":"%s","tpm2-pcrs":[7],"tpm2-pcr-bank":"sha256","tpm2-primary-alg":"ecc","tpm2-policy-hash":"%s","tpm2-pin":false}'
