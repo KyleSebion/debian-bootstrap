@@ -5,7 +5,7 @@ export INSTALL_DEV=/dev/vda # this drive will be wiped!
 export UKI_IMG=/root/uki.bmp
 export SBCTL=/usr/local/sbin/sbctl
 export SIGNPKG=/root/ks-systemd-boot-signer_1.0_all.deb
-export TMPLUKSPASS=$(head -c 32 /dev/urandom | base64)
+export TMPLUKSPASS; read TMPLUKSPASS <<< $(head -c 32 /dev/urandom | base64)
 
 apt update
 apt -y install parted dosfstools arch-install-scripts mmdebstrap efibootmgr cryptsetup
@@ -13,8 +13,8 @@ wipefs -a "$INSTALL_DEV"*
 parted "$INSTALL_DEV" mklabel gpt mkpart e fat32 4MiB 1020MiB mkpart r 1020MiB 3068MiB set 1 esp on
 udevadm settle
 mkfs.fat -F 32 -n e /dev/disk/by-partlabel/e
-echo -n "$TMPLUKSPASS" | cryptsetup -d - luksFormat /dev/disk/by-partlabel/r
-echo -n "$TMPLUKSPASS" | cryptsetup -d - luksOpen   /dev/disk/by-partlabel/r r
+<<< "$TMPLUKSPASS" tr -d \\n | cryptsetup -d - luksFormat /dev/disk/by-partlabel/r
+<<< "$TMPLUKSPASS" tr -d \\n | cryptsetup -d - luksOpen   /dev/disk/by-partlabel/r r
 mkfs.ext4 -L r $([ -b /dev/mapper/r ] && echo /dev/mapper/r || echo /dev/disk/by-partlabel/r)
 mount LABEL=r "$CHROOT_DIR"
 mmdebstrap --aptopt='Acquire::http { Proxy "http://10.10.10.1:3142"; }' --skip=cleanup/apt,cleanup/reproducible bookworm "$CHROOT_DIR"
@@ -105,6 +105,10 @@ debconf-set-selections <<< 'console-setup console-setup/codeset47 select Guess o
 apt -y install cryptsetup-initramfs tpm2-tools xxd
 echo r PARTLABEL=r none tpm2-device=auto,x-initrd.attach >> /etc/crypttab
 
+# Turn off -x to get rid of pages of hex output
+shellOpts="$-"
+[[ "$shellOpts" =~ x ]] && set +x
+
 # Calculate PCR7
 switchHexEndian () { grep -o .. | tac | tr -d \\n; }
 sha256UefiVariableData () {
@@ -137,6 +141,9 @@ bdb=$(getEfiVar db)
 szbdb0=$((0x$(echo "$bdb" | tail -c +$((1+16*2)) | head -c 8 | switchHexEndian)))
 extendPcr7 "$(sha256EfiVarWithData db "$(echo "$bdb" | head -c $((szbdb0*2)) | tail -c +$((1+28*2)))")"
 
+# Turn -x back on
+[[ "$shellOpts" =~ x ]] && set -x
+
 # Enroll TPM2 with calculated PCR7
 d=$(mktemp -d)
 pushd "$d" &> /dev/null
@@ -145,10 +152,10 @@ tpm2_startauthsession -S pcr.ctx
 tpm2_policypcr -S pcr.ctx -l sha256:7 -f pcr.bin -L pol.bin
 tpm2_flushcontext pcr.ctx
 tpm2_createprimary -C o -c prim.ctx -g sha256 -G ecc -a 'restricted|decrypt|fixedtpm|fixedparent|sensitivedataorigin|userwithauth'
-luksPass=$(head -c 32 /dev/urandom | base64)
-echo -n "$luksPass" | base64 -d | tpm2_create -C prim.ctx -u public.obj -r private.obj -L pol.bin -i-
-echo -n "$luksPass" | cryptsetup -d <(echo -n "$TMPLUKSPASS") --new-keyfile - luksAddKey /dev/disk/by-partlabel/r
-echo -n "$luksPass" | cryptsetup luksKillSlot /dev/disk/by-partlabel/r 0
+read luksPass <<< $(head -c 32 /dev/urandom | base64)
+<<< $luksPass base64 -d | tpm2_create -C prim.ctx -u public.obj -r private.obj -L pol.bin -i-
+<<< $luksPass tr -d \\n | cryptsetup -d <(<<< $TMPLUKSPASS tr -d \\n) --new-keyfile - luksAddKey /dev/disk/by-partlabel/r
+<<< $luksPass tr -d \\n | cryptsetup luksKillSlot /dev/disk/by-partlabel/r 0
 unset luksPass
 tpm2PolHash=$(xxd -p pol.bin | tr -d ' \n')
 tpm2Blob=$(cat private.obj public.obj | base64 | tr -d ' \n')
